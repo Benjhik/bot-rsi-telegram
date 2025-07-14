@@ -1,0 +1,7 @@
+services:
+  - type: worker
+    name: bot-rsi-telegram
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 robot_multi_volatility_rsi.py
