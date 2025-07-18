@@ -44,10 +44,12 @@ def calculate_rsi(prices, period=14):
     return round(100 - (100 / (1 + rs)), 2)
 
 def handle_tick(symbol, price):
+    print(f"🔁 Tick reçu pour {symbol} : {price}")  # <== Debug ici ✅
     price_data[symbol].append(price)
     if len(price_data[symbol]) > RSI_PERIOD + 1:
         rsi = calculate_rsi(price_data[symbol])
         if rsi is not None:
+            print(f"📊 {symbol} - RSI: {rsi}")  # Ajout optionnel de debug RSI
             if rsi < 30:
                 send_telegram_message(f"✅ SIGNAL D'ACHAT - {symbol}\nRSI = {rsi}\nPrix = {price}")
             elif rsi > 70:
