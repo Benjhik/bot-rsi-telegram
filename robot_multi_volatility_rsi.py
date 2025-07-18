@@ -13,9 +13,14 @@ TELEGRAM_USER_ID = os.getenv("TELEGRAM_USER_ID") or "1248366985"
 RSI_PERIOD = 14
 ANALYSE_INTERVAL = 900  # 15 minutes
 
+# ✅ Liste complète et corrigée des symboles Deriv
 SYMBOLS = [
-    "R_10", "R_25", "R_50", "R_75", "R_100",
-    "R_10_1s", "R_25_1s", "R_50_1s", "R_75_1s", "R_100_1s"
+    "R_10_Index", "R_25_Index", "R_50_Index", "R_75_Index", "R_100_Index",
+    "R_10_1s_Index", "R_25_1s_Index", "R_50_1s_Index", "R_75_1s_Index", "R_100_1s_Index",
+    "Boom_1000_Index", "Boom_500_Index", "Crash_1000_Index", "Crash_500_Index",
+    "RB_100_Index", "RB_1000_Index",
+    "Step_Index",
+    "Jump_10_Index", "Jump_25_Index", "Jump_50_Index", "Jump_75_Index", "Jump_100_Index"
 ]
 
 price_data = {symbol: [] for symbol in SYMBOLS}
