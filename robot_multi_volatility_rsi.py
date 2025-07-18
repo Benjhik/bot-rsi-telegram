@@ -24,9 +24,10 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_USER_ID, "text": message}
     try:
-        requests.post(url, data=payload)
+        response = requests.post(url, data=payload)
+        print(f"📤 Message Telegram envoyé : {response.status_code} - {message}")
     except Exception as e:
-        print(f"Erreur Telegram : {e}")
+        print(f"❌ Erreur Telegram : {e}")
 
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1:
@@ -44,12 +45,12 @@ def calculate_rsi(prices, period=14):
     return round(100 - (100 / (1 + rs)), 2)
 
 def handle_tick(symbol, price):
-    print(f"🔁 Tick reçu pour {symbol} : {price}")  # <== Debug ici ✅
+    print(f"🔁 Tick reçu pour {symbol} : {price}")
     price_data[symbol].append(price)
     if len(price_data[symbol]) > RSI_PERIOD + 1:
         rsi = calculate_rsi(price_data[symbol])
         if rsi is not None:
-            print(f"📊 {symbol} - RSI: {rsi}")  # Ajout optionnel de debug RSI
+            print(f"📊 {symbol} - RSI: {rsi}")
             if rsi < 30:
                 send_telegram_message(f"✅ SIGNAL D'ACHAT - {symbol}\nRSI = {rsi}\nPrix = {price}")
             elif rsi > 70:
@@ -69,21 +70,23 @@ def periodic_analysis():
 
 def start_symbol_ws(symbol):
     def on_message(ws, message):
+        print(f"📩 Message brut reçu pour {symbol}")
         data = json.loads(message)
         if "tick" in data:
             price = float(data["tick"]["quote"])
             handle_tick(symbol, price)
 
     def on_open(ws):
+        print(f"🌐 Connexion WebSocket ouverte pour {symbol}")
         ws.send(json.dumps({"authorize": DERIV_API_TOKEN}))
 
     def on_authorized(ws):
+        print(f"✅ Autorisation réussie pour {symbol}")
         ws.send(json.dumps({"ticks_subscribe": symbol}))
 
     def on_message_with_auth(ws, message):
         data = json.loads(message)
         if data.get("msg_type") == "authorize":
-            print(f"✅ Autorisé : {symbol}")
             on_authorized(ws)
         else:
             on_message(ws, message)
@@ -102,6 +105,7 @@ send_telegram_message("🚀 Le robot RSI multi-volatility a démarré avec succ�
 threading.Thread(target=periodic_analysis, daemon=True).start()
 
 # Lancement des WebSocket pour chaque actif
+print("🚀 Lancement des connexions WebSocket...")
 for symbol in SYMBOLS:
     threading.Thread(target=start_symbol_ws, args=(symbol,), daemon=True).start()
     time.sleep(1)
