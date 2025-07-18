@@ -43,56 +43,27 @@ def calculate_rsi(prices, period=14):
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
 
-def get_trend(prices):
-    if len(prices) < 5:
-        return "Indéterminée"
-    return "📈 Hausse" if prices[-1] > prices[-5] else "📉 Baisse"
-
 def handle_tick(symbol, price):
     price_data[symbol].append(price)
     if len(price_data[symbol]) > RSI_PERIOD + 1:
         rsi = calculate_rsi(price_data[symbol])
-        trend = get_trend(price_data[symbol])
-        heure = datetime.datetime.now().strftime("%H:%M:%S")
-
-        message = f"""📊 *{symbol}*
-🕒 {heure}
-💰 Prix actuel : {price}
-📈 RSI : {rsi}
-📉 Tendance : {trend}
-"""
-        send_telegram_message(message)
-
         if rsi is not None:
             if rsi < 30:
-                send_telegram_message(f"✅ *SIGNAL D'ACHAT* - {symbol}
-RSI = {rsi}
-Prix = {price}")
+                send_telegram_message(f"✅ SIGNAL D'ACHAT - {symbol}\nRSI = {rsi}\nPrix = {price}")
             elif rsi > 70:
-                send_telegram_message(f"⚠️ *SIGNAL DE VENTE* - {symbol}
-RSI = {rsi}
-Prix = {price}")
-
+                send_telegram_message(f"⚠️ SIGNAL DE VENTE - {symbol}\nRSI = {rsi}\nPrix = {price}")
     if len(price_data[symbol]) > 100:
         price_data[symbol] = price_data[symbol][-100:]
 
 def periodic_analysis():
     while True:
         time.sleep(ANALYSE_INTERVAL)
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        now = datetime.datetime.now().strftime("%H:%M:%S")
         for symbol in SYMBOLS:
             rsi = calculate_rsi(price_data[symbol])
-            trend = get_trend(price_data[symbol])
             if rsi is not None and price_data[symbol]:
-                last_price = price_data[symbol][-1]
-                message = f"""🔄 *Analyse Périodique*
-📊 {symbol}
-🕒 {now}
-💰 Prix : {last_price}
-📈 RSI : {rsi}
-📉 Tendance : {trend}
-"""
-                send_telegram_message(message)
+                price = price_data[symbol][-1]
+                send_telegram_message(f"[{now}] - Analyse périodique\n{symbol}\nRSI = {rsi}\nPrix = {price}")
 
 def start_symbol_ws(symbol):
     def on_message(ws, message):
@@ -122,12 +93,17 @@ def start_symbol_ws(symbol):
     )
     ws.run_forever()
 
+# Message de démarrage
 send_telegram_message("🚀 Le robot RSI multi-volatility a démarré avec succès !")
+
+# Lancement de l’analyse périodique
 threading.Thread(target=periodic_analysis, daemon=True).start()
 
+# Lancement des WebSocket pour chaque actif
 for symbol in SYMBOLS:
     threading.Thread(target=start_symbol_ws, args=(symbol,), daemon=True).start()
     time.sleep(1)
 
+# Garde le programme actif
 while True:
     time.sleep(60)
