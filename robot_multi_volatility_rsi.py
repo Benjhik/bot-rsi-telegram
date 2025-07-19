@@ -6,6 +6,8 @@ import threading
 import time
 import datetime
 
+print("🟢 SCRIPT LANCÉ ✅", flush=True)  # 👈 log de démarrage global
+
 # === CONFIGURATION ===
 DERIV_API_TOKEN = os.getenv("DERIV_API_TOKEN") or "Zr835xahVCQH9jh"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or "7691800437:AAHi4riJ_36kj_8uN3pucxBySgWRk3yY2FI"
@@ -13,14 +15,9 @@ TELEGRAM_USER_ID = os.getenv("TELEGRAM_USER_ID") or "1248366985"
 RSI_PERIOD = 14
 ANALYSE_INTERVAL = 900  # 15 minutes
 
-# ✅ Liste complète et corrigée des symboles Deriv
 SYMBOLS = [
-    "R_10_Index", "R_25_Index", "R_50_Index", "R_75_Index", "R_100_Index",
-    "R_10_1s_Index", "R_25_1s_Index", "R_50_1s_Index", "R_75_1s_Index", "R_100_1s_Index",
-    "Boom_1000_Index", "Boom_500_Index", "Crash_1000_Index", "Crash_500_Index",
-    "RB_100_Index", "RB_1000_Index",
-    "Step_Index",
-    "Jump_10_Index", "Jump_25_Index", "Jump_50_Index", "Jump_75_Index", "Jump_100_Index"
+    "R_10", "R_25", "R_50", "R_75", "R_100",
+    "R_10_1s", "R_25_1s", "R_50_1s", "R_75_1s", "R_100_1s"
 ]
 
 price_data = {symbol: [] for symbol in SYMBOLS}
@@ -30,9 +27,9 @@ def send_telegram_message(message):
     payload = {"chat_id": TELEGRAM_USER_ID, "text": message}
     try:
         response = requests.post(url, data=payload)
-        print(f"📤 Message Telegram envoyé : {response.status_code} - {message}")
+        print(f"📤 Message Telegram envoyé : {response.status_code} - {message}", flush=True)
     except Exception as e:
-        print(f"❌ Erreur Telegram : {e}")
+        print(f"❌ Erreur Telegram : {e}", flush=True)
 
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1:
@@ -50,12 +47,12 @@ def calculate_rsi(prices, period=14):
     return round(100 - (100 / (1 + rs)), 2)
 
 def handle_tick(symbol, price):
-    print(f"🔁 Tick reçu pour {symbol} : {price}")
+    print(f"🔁 Tick reçu pour {symbol} : {price}", flush=True)
     price_data[symbol].append(price)
     if len(price_data[symbol]) > RSI_PERIOD + 1:
         rsi = calculate_rsi(price_data[symbol])
         if rsi is not None:
-            print(f"📊 {symbol} - RSI: {rsi}")
+            print(f"📊 {symbol} - RSI: {rsi}", flush=True)
             if rsi < 30:
                 send_telegram_message(f"✅ SIGNAL D'ACHAT - {symbol}\nRSI = {rsi}\nPrix = {price}")
             elif rsi > 70:
@@ -75,18 +72,18 @@ def periodic_analysis():
 
 def start_symbol_ws(symbol):
     def on_message(ws, message):
-        print(f"📩 Message brut reçu pour {symbol}")
+        print(f"📩 Message brut reçu pour {symbol}", flush=True)
         data = json.loads(message)
         if "tick" in data:
             price = float(data["tick"]["quote"])
             handle_tick(symbol, price)
 
     def on_open(ws):
-        print(f"🌐 Connexion WebSocket ouverte pour {symbol}")
+        print(f"🌐 Connexion WebSocket ouverte pour {symbol}", flush=True)
         ws.send(json.dumps({"authorize": DERIV_API_TOKEN}))
 
     def on_authorized(ws):
-        print(f"✅ Autorisation réussie pour {symbol}")
+        print(f"✅ Autorisation réussie pour {symbol}", flush=True)
         ws.send(json.dumps({"ticks_subscribe": symbol}))
 
     def on_message_with_auth(ws, message):
@@ -96,12 +93,15 @@ def start_symbol_ws(symbol):
         else:
             on_message(ws, message)
 
-    ws = websocket.WebSocketApp(
-        "wss://ws.deriv.com/websockets/v3",
-        on_message=on_message_with_auth,
-        on_open=on_open
-    )
-    ws.run_forever()
+    try:
+        ws = websocket.WebSocketApp(
+            "wss://ws.deriv.com/websockets/v3",
+            on_message=on_message_with_auth,
+            on_open=on_open
+        )
+        ws.run_forever()
+    except Exception as e:
+        print(f"❌ ERREUR WebSocket pour {symbol} : {e}", flush=True)
 
 # Message de démarrage
 send_telegram_message("🚀 Le robot RSI multi-volatility a démarré avec succès !")
@@ -110,8 +110,9 @@ send_telegram_message("🚀 Le robot RSI multi-volatility a démarré avec succ�
 threading.Thread(target=periodic_analysis, daemon=True).start()
 
 # Lancement des WebSocket pour chaque actif
-print("🚀 Lancement des connexions WebSocket...")
+print("🚀 Lancement des connexions WebSocket...", flush=True)
 for symbol in SYMBOLS:
+    print(f"📡 Lancement du thread pour {symbol}", flush=True)
     threading.Thread(target=start_symbol_ws, args=(symbol,), daemon=True).start()
     time.sleep(1)
 
