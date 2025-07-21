@@ -85,19 +85,12 @@ def analyze_symbol(symbol):
         sl = round(price - SL_POINTS if signal == "BUY" else price + SL_POINTS, 2)
         tp = round(price + TP_POINTS if signal == "BUY" else price - TP_POINTS, 2)
         now = datetime.datetime.utcnow() + datetime.timedelta(hours=0)
-        message = (
-            f"📊 *{symbol}*
-"
-            f"Prix : {price}
-"
-            f"Signal : {signal}
-"
-            f"Heure : {now.strftime('%H:%M')} (UTC)
-"
-            f"Ordre : {order_type}
-"
-            f"SL : {sl} | TP : {tp}"
-        )
+        message = f"""📊 *{symbol}*
+        Prix : {price}
+        Signal : {signal}
+        Heure : {now.strftime('%H:%M')} (UTC)
+        Ordre : {order_type}
+        SL : {sl} | TP : {tp}"""
         send_telegram_message(message)
 
 def scheduled_analysis():
