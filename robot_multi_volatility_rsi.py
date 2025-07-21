@@ -1,121 +1,111 @@
-import os
 import websocket
 import json
-import requests
-import threading
+import pandas as pd
 import time
 import datetime
-
-print("🟢 SCRIPT LANCÉ ✅", flush=True)  # 👈 log de démarrage global
+import threading
+import requests
 
 # === CONFIGURATION ===
-DERIV_API_TOKEN = os.getenv("DERIV_API_TOKEN") or "Zr835xahVCQH9jh"
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or "7691800437:AAHi4riJ_36kj_8uN3pucxBySgWRk3yY2FI"
-TELEGRAM_USER_ID = os.getenv("TELEGRAM_USER_ID") or "1248366985"
-RSI_PERIOD = 14
-ANALYSE_INTERVAL = 900  # 15 minutes
-
-SYMBOLS = [
+DERIV_SYMBOLS = [
     "R_10", "R_25", "R_50", "R_75", "R_100",
     "R_10_1s", "R_25_1s", "R_50_1s", "R_75_1s", "R_100_1s"
 ]
 
-price_data = {symbol: [] for symbol in SYMBOLS}
+RSI_PERIOD = 14
+RSI_OVERBOUGHT = 70
+RSI_OVERSOLD = 30
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
 
+TELEGRAM_BOT_TOKEN = "7691800437:AAHi4riJ_36kj_8uN3pucxBySgWRk3yY2FI"
+TELEGRAM_CHAT_ID = "1248366985"
+
+TP_POINTS = 200
+SL_POINTS = 100
+
+# === FONCTIONS UTILITAIRES ===
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_USER_ID, "text": message}
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
-        response = requests.post(url, data=payload)
-        print(f"📤 Message Telegram envoyé : {response.status_code} - {message}", flush=True)
+        requests.post(url, data=data)
     except Exception as e:
-        print(f"❌ Erreur Telegram : {e}", flush=True)
+        print("Erreur Telegram:", e)
 
-def calculate_rsi(prices, period=14):
-    if len(prices) < period + 1:
-        return None
-    gains, losses = [], []
-    for i in range(1, period + 1):
-        delta = prices[-i] - prices[-i - 1]
-        gains.append(max(delta, 0))
-        losses.append(-min(delta, 0))
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-    if avg_loss == 0:
-        return 100
+def calculate_rsi(prices, period):
+    delta = prices.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
     rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 2)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-def handle_tick(symbol, price):
-    print(f"🔁 Tick reçu pour {symbol} : {price}", flush=True)
-    price_data[symbol].append(price)
-    if len(price_data[symbol]) > RSI_PERIOD + 1:
-        rsi = calculate_rsi(price_data[symbol])
-        if rsi is not None:
-            print(f"📊 {symbol} - RSI: {rsi}", flush=True)
-            if rsi < 30:
-                send_telegram_message(f"✅ SIGNAL D'ACHAT - {symbol}\nRSI = {rsi}\nPrix = {price}")
-            elif rsi > 70:
-                send_telegram_message(f"⚠️ SIGNAL DE VENTE - {symbol}\nRSI = {rsi}\nPrix = {price}")
-    if len(price_data[symbol]) > 100:
-        price_data[symbol] = price_data[symbol][-100:]
+def calculate_macd(prices):
+    ema_fast = prices.ewm(span=MACD_FAST, adjust=False).mean()
+    ema_slow = prices.ewm(span=MACD_SLOW, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=MACD_SIGNAL, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
 
-def periodic_analysis():
-    while True:
-        time.sleep(ANALYSE_INTERVAL)
-        now = datetime.datetime.now().strftime("%H:%M:%S")
-        for symbol in SYMBOLS:
-            rsi = calculate_rsi(price_data[symbol])
-            if rsi is not None and price_data[symbol]:
-                price = price_data[symbol][-1]
-                send_telegram_message(f"[{now}] - Analyse périodique\n{symbol}\nRSI = {rsi}\nPrix = {price}")
+def determine_signal(rsi, macd_line, signal_line):
+    if rsi < RSI_OVERSOLD and macd_line.iloc[-1] > signal_line.iloc[-1]:
+        return "BUY", "Buy Stop"
+    elif rsi > RSI_OVERBOUGHT and macd_line.iloc[-1] < signal_line.iloc[-1]:
+        return "SELL", "Sell Stop"
+    return None, None
 
-def start_symbol_ws(symbol):
-    def on_message(ws, message):
-        print(f"📩 Message brut reçu pour {symbol}", flush=True)
-        data = json.loads(message)
-        if "tick" in data:
-            price = float(data["tick"]["quote"])
-            handle_tick(symbol, price)
+def analyze_symbol(symbol):
+    ws = websocket.create_connection("wss://ws.derivws.com/websockets/v3?app_id=1089")
+    ws.send(json.dumps({"ticks_history": symbol, "adjust_start_time": 1, "count": 100,
+                        "end": "latest", "start": 1, "style": "candles", "granularity": 300,
+                        "req_id": symbol, "subscribe": 0}))
 
-    def on_open(ws):
-        print(f"🌐 Connexion WebSocket ouverte pour {symbol}", flush=True)
-        ws.send(json.dumps({"authorize": DERIV_API_TOKEN}))
+    data = json.loads(ws.recv())
+    ws.close()
 
-    def on_authorized(ws):
-        print(f"✅ Autorisation réussie pour {symbol}", flush=True)
-        ws.send(json.dumps({"ticks_subscribe": symbol}))
+    candles = data.get("candles", [])
+    if len(candles) < RSI_PERIOD:
+        return
 
-    def on_message_with_auth(ws, message):
-        data = json.loads(message)
-        if data.get("msg_type") == "authorize":
-            on_authorized(ws)
-        else:
-            on_message(ws, message)
+    df = pd.DataFrame(candles)
+    df["close"] = pd.to_numeric(df["close"])
+    prices = df["close"]
 
-    try:
-        ws = websocket.WebSocketApp(
-            "wss://ws.deriv.com/websockets/v3",
-            on_message=on_message_with_auth,
-            on_open=on_open
+    rsi_series = calculate_rsi(prices, RSI_PERIOD)
+    macd_line, signal_line, histogram = calculate_macd(prices)
+
+    signal, order_type = determine_signal(rsi_series.iloc[-1], macd_line, signal_line)
+    if signal:
+        price = prices.iloc[-1]
+        sl = round(price - SL_POINTS if signal == "BUY" else price + SL_POINTS, 2)
+        tp = round(price + TP_POINTS if signal == "BUY" else price - TP_POINTS, 2)
+        now = datetime.datetime.utcnow() + datetime.timedelta(hours=0)
+        message = (
+            f"📊 *{symbol}*
+"
+            f"Prix : {price}
+"
+            f"Signal : {signal}
+"
+            f"Heure : {now.strftime('%H:%M')} (UTC)
+"
+            f"Ordre : {order_type}
+"
+            f"SL : {sl} | TP : {tp}"
         )
-        ws.run_forever()
-    except Exception as e:
-        print(f"❌ ERREUR WebSocket pour {symbol} : {e}", flush=True)
+        send_telegram_message(message)
 
-# Message de démarrage
-send_telegram_message("🚀 Le robot RSI multi-volatility a démarré avec succès !")
+def scheduled_analysis():
+    while True:
+        for symbol in DERIV_SYMBOLS:
+            threading.Thread(target=analyze_symbol, args=(symbol,)).start()
+        time.sleep(900)  # 15 minutes
 
-# Lancement de l’analyse périodique
-threading.Thread(target=periodic_analysis, daemon=True).start()
-
-# Lancement des WebSocket pour chaque actif
-print("🚀 Lancement des connexions WebSocket...", flush=True)
-for symbol in SYMBOLS:
-    print(f"📡 Lancement du thread pour {symbol}", flush=True)
-    threading.Thread(target=start_symbol_ws, args=(symbol,), daemon=True).start()
-    time.sleep(1)
-
-# Garde le programme actif
-while True:
-    time.sleep(60)
+if __name__ == "__main__":
+    send_telegram_message("🚀 Le robot RSI + MACD multi-volatility a démarré avec succès !")
+    scheduled_analysis()
