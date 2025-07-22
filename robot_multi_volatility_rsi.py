@@ -1,113 +1,134 @@
 import websocket
 import json
-import pandas as pd
 import time
-import datetime
 import threading
+import pandas as pd
 import requests
+from datetime import datetime
 
 # === CONFIGURATION ===
-DERIV_SYMBOLS = [
-    "R_10", "R_25", "R_50", "R_75", "R_100",
-    "R_10_1s", "R_25_1s", "R_50_1s", "R_75_1s", "R_100_1s"
-]
-
+DERIV_API_TOKEN = "Zr835xahVCQH9jh"
+TELEGRAM_BOT_TOKEN = "7691800437:AAHi4riJ_36kj_8uN3pucxBySgWRk3yY2FI"
+TELEGRAM_USER_ID = "1248366985"
 RSI_PERIOD = 14
-RSI_OVERBOUGHT = 70
-RSI_OVERSOLD = 30
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
+INTERVAL_SECONDS = 900  # 15 minutes
 
-TELEGRAM_BOT_TOKEN = "7691800437:AAHi4riJ_36kj_8uN3pucxBySgWRk3yY2FI"
-TELEGRAM_CHAT_ID = "1248366985"
+SYMBOLS = [
+    "R_10", "R_25", "R_50", "R_75", "R_100",
+    "R_10_1s", "R_25_1s", "R_50_1s", "R_75_1s", "R_100_1s",
+    "BOOM1000", "BOOM500", "CRASH1000", "CRASH500",
+    "RB_100", "RB_1000", "JD_10", "JD_25", "JD_50", "JD_75", "JD_100", "STP"
+]
 
-TP_POINTS = 200
-SL_POINTS = 100
-
-# === FONCTIONS UTILITAIRES ===
-def send_telegram_message(message):
+def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    data = {"chat_id": TELEGRAM_USER_ID, "text": message}
     try:
-        response = requests.post(url, data=data)
-        print(f"✅ Message Telegram envoyé : {response.status_code}")
+        requests.post(url, data=data)
     except Exception as e:
-        print("Erreur Telegram:", e)
+        print("Telegram error:", e)
 
-def calculate_rsi(prices, period):
+def calculate_rsi(prices, period=RSI_PERIOD):
     delta = prices.diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
     avg_gain = gain.rolling(window=period).mean()
     avg_loss = loss.rolling(window=period).mean()
     rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    return 100 - (100 / (1 + rs))
 
 def calculate_macd(prices):
-    ema_fast = prices.ewm(span=MACD_FAST, adjust=False).mean()
-    ema_slow = prices.ewm(span=MACD_SLOW, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=MACD_SIGNAL, adjust=False).mean()
-    histogram = macd_line - signal_line
-    return macd_line, signal_line, histogram
+    fast_ema = prices.ewm(span=MACD_FAST, adjust=False).mean()
+    slow_ema = prices.ewm(span=MACD_SLOW, adjust=False).mean()
+    macd = fast_ema - slow_ema
+    signal = macd.ewm(span=MACD_SIGNAL, adjust=False).mean()
+    return macd, signal
 
-def determine_signal(rsi, macd_line, signal_line):
-    if rsi < RSI_OVERSOLD and macd_line.iloc[-1] > signal_line.iloc[-1]:
-        return "BUY", "Buy Stop"
-    elif rsi > RSI_OVERBOUGHT and macd_line.iloc[-1] < signal_line.iloc[-1]:
-        return "SELL", "Sell Stop"
-    return None, None
+def determine_order_type(signal, current_price, tp):
+    if signal == "BUY":
+        return "Buy Stop" if current_price < tp else "Buy Limit"
+    elif signal == "SELL":
+        return "Sell Stop" if current_price > tp else "Sell Limit"
+    return "Market Execution"
 
-def analyze_symbol(symbol):
-    try:
-        ws = websocket.create_connection("wss://ws.derivws.com/websockets/v3?app_id=1089")
-        ws.send(json.dumps({
-            "ticks_history": symbol,
-            "count": 500,
-            "end": "latest",
-            "style": "ticks",
-            "subscribe": 0,
-            "req_id": symbol
-        }))
+def analyse_symbol(symbol):
+    ws = websocket.create_connection("wss://ws.derivws.com/websockets/v3?app_id=1089")
+    
+    ws.send(json.dumps({
+        "ticks_history": symbol,
+        "adjust_start_time": 1,
+        "count": 100,
+        "end": "latest",
+        "start": 1,
+        "style": "candles",
+        "granularity": 300,
+        "req_id": symbol
+    }))
 
-        data = json.loads(ws.recv())
-        ws.close()
+    response = json.loads(ws.recv())
+    ws.close()
 
-        prices_raw = data.get("history", {}).get("prices", [])
-        if len(prices_raw) < RSI_PERIOD:
-            print(f"⚠️ Pas assez de données pour {symbol}")
-            return
+    if "candles" not in response:
+        return None
 
-        prices = pd.Series([float(p) for p in prices_raw])
-        rsi_series = calculate_rsi(prices, RSI_PERIOD)
-        macd_line, signal_line, histogram = calculate_macd(prices)
+    df = pd.DataFrame(response["candles"])
+    df["close"] = pd.to_numeric(df["close"])
+    df["high"] = pd.to_numeric(df["high"])
+    df["low"] = pd.to_numeric(df["low"])
+    df["epoch"] = pd.to_datetime(df["epoch"], unit="s")
+    df.set_index("epoch", inplace=True)
 
-        signal, order_type = determine_signal(rsi_series.iloc[-1], macd_line, signal_line)
-        if signal:
-            price = prices.iloc[-1]
-            sl = round(price - SL_POINTS if signal == "BUY" else price + SL_POINTS, 2)
-            tp = round(price + TP_POINTS if signal == "BUY" else price - TP_POINTS, 2)
-            now = datetime.datetime.utcnow()
-            message = f"""📊 {symbol}
-Prix : {price}
-Signal : {signal}
-Heure : {now.strftime('%H:%M')} (UTC)
-Ordre : {order_type}
-SL : {sl} | TP : {tp}"""
-            send_telegram_message(message)
-    except Exception as e:
-        print(f"⛔ Erreur lors de l'analyse de {symbol} :", e)
+    rsi = calculate_rsi(df["close"])
+    macd, signal_line = calculate_macd(df["close"])
 
-def scheduled_analysis():
-    print("🟢 SCRIPT LANCÉ")
+    if len(rsi) < RSI_PERIOD or len(macd) < MACD_SLOW:
+        return None
+
+    last_price = df["close"].iloc[-1]
+    last_rsi = rsi.iloc[-1]
+    last_macd = macd.iloc[-1]
+    last_signal = signal_line.iloc[-1]
+
+    if last_rsi < 30 and last_macd > last_signal:
+        signal_type = "BUY"
+    elif last_rsi > 70 and last_macd < last_signal:
+        signal_type = "SELL"
+    else:
+        return None
+
+    atr = df["high"].rolling(14).max() - df["low"].rolling(14).min()
+    sl = round(atr.iloc[-1] / 2, 2)
+    tp = round(atr.iloc[-1], 2)
+
+    sl_price = round(last_price - sl if signal_type == "BUY" else last_price + sl, 2)
+    tp_price = round(last_price + tp if signal_type == "BUY" else last_price - tp, 2)
+    order_type = determine_order_type(signal_type, last_price, tp_price)
+    entry_time = datetime.now().strftime("%Hh%Mmin")
+
+    return f"""📊 {symbol}
+🎯 Prix actuel : {round(last_price, 2)}
+📈 Signal : {signal_type}
+🕒 Heure conseillée : {entry_time}
+🛠 Type d'ordre : {order_type}
+💰 TP : {tp_price} | 🛑 SL : {sl_price}"""
+
+def analyse_all():
+    send_telegram("🤖 Analyse en cours de tous les indices Deriv...")
+    for symbol in SYMBOLS:
+        try:
+            result = analyse_symbol(symbol)
+            if result:
+                send_telegram(result)
+        except Exception as e:
+            print(f"Erreur sur {symbol} : {e}")
+
+# === THREAD LOOP ===
+def loop():
     while True:
-        print("🚀 Nouvelle itération d'analyse")
-        for symbol in DERIV_SYMBOLS:
-            threading.Thread(target=analyze_symbol, args=(symbol,), daemon=True).start()
-        time.sleep(900)  # 15 minutes
+        analyse_all()
+        time.sleep(INTERVAL_SECONDS)
 
-if __name__ == "__main__":
-    send_telegram_message("🚀 Le robot RSI + MACD multi-volatility a démarré avec succès !")
-    scheduled_analysis()
+threading.Thread(target=loop).start()
