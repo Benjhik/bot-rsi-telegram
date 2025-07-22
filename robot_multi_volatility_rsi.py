@@ -31,9 +31,9 @@ def send_telegram_message(message):
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
         response = requests.post(url, data=data)
-        print("✅ Message Telegram envoyé :", response.status_code)
+        print(f"✅ Message Telegram envoyé : {response.status_code}")
     except Exception as e:
-        print("❌ Erreur Telegram:", e)
+        print("Erreur Telegram:", e)
 
 def calculate_rsi(prices, period):
     delta = prices.diff()
@@ -64,56 +64,50 @@ def analyze_symbol(symbol):
     try:
         ws = websocket.create_connection("wss://ws.derivws.com/websockets/v3?app_id=1089")
         ws.send(json.dumps({
-            "ticks_history": symbol, "adjust_start_time": 1, "count": 100,
-            "end": "latest", "start": 1, "style": "candles", "granularity": 300,
-            "req_id": symbol, "subscribe": 0
+            "ticks_history": symbol,
+            "count": 500,
+            "end": "latest",
+            "style": "ticks",
+            "subscribe": 0,
+            "req_id": symbol
         }))
 
         data = json.loads(ws.recv())
         ws.close()
 
-        candles = data.get("candles", [])
-        if len(candles) < RSI_PERIOD:
+        prices_raw = data.get("history", {}).get("prices", [])
+        if len(prices_raw) < RSI_PERIOD:
             print(f"⚠️ Pas assez de données pour {symbol}")
             return
 
-        df = pd.DataFrame(candles)
-        df["close"] = pd.to_numeric(df["close"])
-        prices = df["close"]
-
+        prices = pd.Series([float(p) for p in prices_raw])
         rsi_series = calculate_rsi(prices, RSI_PERIOD)
         macd_line, signal_line, histogram = calculate_macd(prices)
 
-        # Impression pour debug
-        print(f"🔍 {symbol} | RSI: {rsi_series.iloc[-1]:.2f} | MACD: {macd_line.iloc[-1]:.2f} | SIGNAL: {signal_line.iloc[-1]:.2f}")
-
-        # TEMPORAIRE POUR TEST – Toujours envoyer un message
-        signal = "BUY"
-        order_type = "Buy Stop"
-
-        price = prices.iloc[-1]
-        sl = round(price - SL_POINTS if signal == "BUY" else price + SL_POINTS, 2)
-        tp = round(price + TP_POINTS if signal == "BUY" else price - TP_POINTS, 2)
-        now = datetime.datetime.utcnow()
-        message = f"""📊 {symbol}
+        signal, order_type = determine_signal(rsi_series.iloc[-1], macd_line, signal_line)
+        if signal:
+            price = prices.iloc[-1]
+            sl = round(price - SL_POINTS if signal == "BUY" else price + SL_POINTS, 2)
+            tp = round(price + TP_POINTS if signal == "BUY" else price - TP_POINTS, 2)
+            now = datetime.datetime.utcnow()
+            message = f"""📊 {symbol}
 Prix : {price}
 Signal : {signal}
 Heure : {now.strftime('%H:%M')} (UTC)
 Ordre : {order_type}
 SL : {sl} | TP : {tp}"""
-        send_telegram_message(message)
-
+            send_telegram_message(message)
     except Exception as e:
-        print(f"❌ Erreur analyse {symbol} :", e)
+        print(f"⛔ Erreur lors de l'analyse de {symbol} :", e)
 
 def scheduled_analysis():
+    print("🟢 SCRIPT LANCÉ")
     while True:
         print("🚀 Nouvelle itération d'analyse")
         for symbol in DERIV_SYMBOLS:
-            threading.Thread(target=analyze_symbol, args=(symbol,)).start()
-        time.sleep(60)  # TEST toutes les 1 minute
+            threading.Thread(target=analyze_symbol, args=(symbol,), daemon=True).start()
+        time.sleep(900)  # 15 minutes
 
 if __name__ == "__main__":
-    print("🟢 SCRIPT LANCÉ")
     send_telegram_message("🚀 Le robot RSI + MACD multi-volatility a démarré avec succès !")
     scheduled_analysis()
