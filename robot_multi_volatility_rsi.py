@@ -55,80 +55,93 @@ def determine_order_type(signal, current_price, tp):
     return "Market Execution"
 
 def analyse_symbol(symbol):
-    ws = websocket.create_connection("wss://ws.derivws.com/websockets/v3?app_id=1089")
-    
-    ws.send(json.dumps({
-        "ticks_history": symbol,
-        "adjust_start_time": 1,
-        "count": 100,
-        "end": "latest",
-        "start": 1,
-        "style": "candles",
-        "granularity": 300,
-        "req_id": symbol
-    }))
+    try:
+        print(f"🌐 Connexion WebSocket à Deriv pour {symbol}...")
+        ws = websocket.create_connection("wss://ws.derivws.com/websockets/v3?app_id=1089")
+        print(f"✅ WebSocket ouverte pour {symbol}")
+        
+        ws.send(json.dumps({
+            "ticks_history": symbol,
+            "adjust_start_time": 1,
+            "count": 100,
+            "end": "latest",
+            "start": 1,
+            "style": "candles",
+            "granularity": 300,
+            "req_id": symbol
+        }))
 
-    response = json.loads(ws.recv())
-    ws.close()
+        response_raw = ws.recv()
+        ws.close()
+        print(f"📩 Donnée reçue pour {symbol}")
 
-    if "candles" not in response:
-        return None
+        response = json.loads(response_raw)
 
-    df = pd.DataFrame(response["candles"])
-    df["close"] = pd.to_numeric(df["close"])
-    df["high"] = pd.to_numeric(df["high"])
-    df["low"] = pd.to_numeric(df["low"])
-    df["epoch"] = pd.to_datetime(df["epoch"], unit="s")
-    df.set_index("epoch", inplace=True)
+        if "candles" not in response:
+            send_telegram(f"⚠️ Aucune donnée reçue pour {symbol}.")
+            print(f"⚠️ Aucune donnée valide pour {symbol}")
+            return None
 
-    rsi = calculate_rsi(df["close"])
-    macd, signal_line = calculate_macd(df["close"])
+        df = pd.DataFrame(response["candles"])
+        df["close"] = pd.to_numeric(df["close"])
+        df["high"] = pd.to_numeric(df["high"])
+        df["low"] = pd.to_numeric(df["low"])
+        df["epoch"] = pd.to_datetime(df["epoch"], unit="s")
+        df.set_index("epoch", inplace=True)
 
-    if len(rsi) < RSI_PERIOD or len(macd) < MACD_SLOW:
-        return None
+        rsi = calculate_rsi(df["close"])
+        macd, signal_line = calculate_macd(df["close"])
 
-    last_price = df["close"].iloc[-1]
-    last_rsi = rsi.iloc[-1]
-    last_macd = macd.iloc[-1]
-    last_signal = signal_line.iloc[-1]
+        if len(rsi) < RSI_PERIOD or len(macd) < MACD_SLOW:
+            print(f"⚠️ Pas assez de données pour {symbol}")
+            return None
 
-    if last_rsi < 30 and last_macd > last_signal:
-        signal_type = "BUY"
-    elif last_rsi > 70 and last_macd < last_signal:
-        signal_type = "SELL"
-    else:
-        return None
+        last_price = df["close"].iloc[-1]
+        last_rsi = rsi.iloc[-1]
+        last_macd = macd.iloc[-1]
+        last_signal = signal_line.iloc[-1]
 
-    atr = df["high"].rolling(14).max() - df["low"].rolling(14).min()
-    sl = round(atr.iloc[-1] / 2, 2)
-    tp = round(atr.iloc[-1], 2)
+        if last_rsi < 30 and last_macd > last_signal:
+            signal_type = "BUY"
+        elif last_rsi > 70 and last_macd < last_signal:
+            signal_type = "SELL"
+        else:
+            return None
 
-    sl_price = round(last_price - sl if signal_type == "BUY" else last_price + sl, 2)
-    tp_price = round(last_price + tp if signal_type == "BUY" else last_price - tp, 2)
-    order_type = determine_order_type(signal_type, last_price, tp_price)
-    entry_time = datetime.now().strftime("%Hh%Mmin")
+        atr = df["high"].rolling(14).max() - df["low"].rolling(14).min()
+        sl = round(atr.iloc[-1] / 2, 2)
+        tp = round(atr.iloc[-1], 2)
 
-    return f"""📊 {symbol}
+        sl_price = round(last_price - sl if signal_type == "BUY" else last_price + sl, 2)
+        tp_price = round(last_price + tp if signal_type == "BUY" else last_price - tp, 2)
+        order_type = determine_order_type(signal_type, last_price, tp_price)
+        entry_time = datetime.now().strftime("%Hh%Mmin")
+
+        return f"""📊 {symbol}
 🎯 Prix actuel : {round(last_price, 2)}
 📈 Signal : {signal_type}
 🕒 Heure conseillée : {entry_time}
 🛠 Type d'ordre : {order_type}
 💰 TP : {tp_price} | 🛑 SL : {sl_price}"""
 
+    except Exception as e:
+        error_msg = f"❌ Erreur WebSocket pour {symbol} : {e}"
+        print(error_msg)
+        send_telegram(error_msg)
+        return None
+
 def analyse_all():
     send_telegram("🤖 Analyse en cours de tous les indices Deriv...")
     for symbol in SYMBOLS:
-        try:
-            result = analyse_symbol(symbol)
-            if result:
-                send_telegram(result)
-        except Exception as e:
-            print(f"Erreur sur {symbol} : {e}")
+        result = analyse_symbol(symbol)
+        if result:
+            send_telegram(result)
 
-# === THREAD LOOP ===
 def loop():
     while True:
         analyse_all()
         time.sleep(INTERVAL_SECONDS)
 
+# Lancement
+print("🟢 DÉMARRAGE DU SCRIPT")
 threading.Thread(target=loop).start()
